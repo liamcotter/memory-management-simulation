@@ -1,13 +1,8 @@
 # visualistion
-from time import sleep
 import os
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"   # hide the pygame support prompt, which is shouldn't be in the library in the first place...
-import pygame
-from math import log2, sqrt
-pygame.init()
-screen_size = 750
-screen = pygame.display.set_mode((screen_size, screen_size))
-pygame.display.set_caption("Memory Visualisation")
+from visualise import Visualiser
+from math import log2
 
 # Future things to do:
 # Change the way memory is written to (use address only, ideally)
@@ -23,9 +18,24 @@ PAGE_SIZE = 1 << 2  # 4 KB
 MIN_BLOCK_SIZE = PAGE_SIZE << 2 # 16 KB
 NUM_BLOCK_SIZES = int(log2(MAIN_MEMORY_SIZE // MIN_BLOCK_SIZE)) + 1 # must include biggest and smallest size, so +1
 
-usable_space = screen_size * 1
-vis_size = sqrt(MAIN_MEMORY_SIZE // MIN_BLOCK_SIZE) # max number of blocks, sqrt to get the sides
+assert MAIN_MEMORY_SIZE > PAGE_SIZE, "Main memory must be larger than page size"
+assert MAIN_MEMORY_SIZE % PAGE_SIZE == 0, "Main memory must be divisible by page size"
+assert MIN_BLOCK_SIZE > PAGE_SIZE, "Minimum block size must be larger than page size"
 
+vis = Visualiser(MAIN_MEMORY_SIZE // MIN_BLOCK_SIZE)
+
+class ProcessContainer:
+    def __init__(self):
+        self._allocated_block = None
+        self._start_range = None
+        self._end_range = None
+    
+    def set_block(self):
+        ...
+
+class BlockFrame:
+    def __init__(self):
+        ...
 
 class Block:
     def __init__(self, address: int, size: int):
@@ -73,7 +83,7 @@ class Memory:
         self.page_faults = 0
         self.page_ops = 0
 
-        self.print_debug = False        # Quick enabling of debug
+        self.print_debug = True        # Quick enabling of debug
 
     def debug(self, item):
         """Prints the debug message if the debug flag is set."""
@@ -91,40 +101,7 @@ class Memory:
 
     
     def __str__(self) -> str:
-        per_block_space = usable_space / vis_size
-        screen.fill((255, 255, 255))
-        for block in self.allocated_blocks.values():
-            addr = block.address
-            size = block.size
-            x, y = self.address_to_coord(addr)
-            real_x, real_y = x * per_block_space, y * per_block_space
-
-            blocks_size = size // MIN_BLOCK_SIZE                        # units as multiples of block minimum size
-            if log2(blocks_size) % 2 != 0:  # isn't square
-                blocks_size = int(sqrt(blocks_size//2))
-                x_size = 2 * per_block_space * blocks_size
-                y_size = per_block_space * blocks_size
-            else:
-                blocks_size = int(sqrt(blocks_size))                    # width = sqrt(area)
-                x_size = per_block_space * blocks_size
-                y_size = per_block_space * blocks_size
-            
-            # Filled Square
-            if block.free:
-                pygame.draw.rect(screen, (0, 255, 0), (real_x, real_y, x_size, y_size))
-            else:
-                pygame.draw.rect(screen, (255, 0, 0), (real_x, real_y, x_size, y_size))
-            # Border
-            pygame.draw.rect(screen, (0, 0, 0), (real_x, real_y, x_size, y_size), width=1)
-            
-        pygame.display.flip()
-        sleep(0.1)
-        #pygame.quit()
-        """while True:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    pygame.quit()
-                    return """""
+        vis.draw(self, MIN_BLOCK_SIZE)
         return ""
 
     def address_to_coord(self, address: int) -> tuple[int, int]:
@@ -147,9 +124,25 @@ class Memory:
         """ Converts the size to the index in the free_blocks list. Same size should give index 0 --> log2(1KB/1KB) = 0"""
         return int(log2((size // MIN_BLOCK_SIZE)))
 
+
+    def address_or_block(func):
+        """Decorator that accepts either an address or block + offset and calls the correct memory function. This reduces duplication for 2 sets of args"""
+        def wrapper(self, *args, **kwargs):
+            if len(args) == 2:  # Address
+                return func(self, *args, **kwargs)
+            elif len(args) == 3:    # Block + offset
+                block, offset, *args = args
+                addr = block.address + offset
+                args = (addr, *args)
+                return func(self, *args, **kwargs)
+            else:
+                raise ValueError("Invalid number of arguments")
+        return wrapper
+
     def memoryoperationchecks(func):
         """Decorator for the memory read and write functions. Checks if the block is in memory and moves it if not."""
         def wrapper(self, block: Block, *args, **kwargs):
+            #block = self.allocated_blocks[address]
             if not block.IsInMemory:
                 self.page_faults += 1
                 self.move_to_memory(block)
@@ -327,41 +320,3 @@ if __name__ == "__main__":
     print(f"Page fault rate: {pf}%")
     print(f"Free memory: {free_m}%")
 
-
-    # b = mem.allocate_block(MAIN_MEMORY_SIZE)
-    # mem.write_to_memory(b, 1, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
-    # print("MEM: ", mem.memory)
-    # print("DISK: ", mem.disk_memory)
-    # c = mem.allocate_block(1)
-    # mem.write_to_memory(c, 0, [1]*c.get_size())
-    # print("MEM: ", mem.memory)
-    # print("DISK: ", mem.disk_memory)
-    # d = mem.allocate_block(MAIN_MEMORY_SIZE)
-    # mem.write_to_memory(d, 0, [2]*d.get_size())
-    # print("MEM: ", mem.memory)
-    # print("DISK: ", mem.disk_memory)
-    # print(mem.read_from_memory(c, 0, 1))
-    # print("MEM: ", mem.memory)
-    # print("DISK: ", mem.disk_memory)
-    # e = mem.allocate_block(1)
-    # mem.write_to_memory(e, 0, [3]*e.get_size())
-    # bfull = mem.allocate_block(4096)
-    # mem.deallocate_block(bfull)
-    # b16 = mem.allocate_block(16)
-    # b127 = mem.allocate_block(127)
-    # b513 = mem.allocate_block(1024)
-    # mem.allocate_block(255)
-    # mem.allocate_block(130)
-    # mem.allocate_block(55)
-    # mem.allocate_block(99)
-    # mem.allocate_block(129)
-    # mem.deallocate_block(b127)
-    # mem.allocate_block(90)
-    # mem.deallocate_block(b513)
-    # mem.allocate_block(257)
-    # mem.allocate_block(154)
-    # mem.allocate_block(103)
-    # mem.allocate_block(48)
-    # mem.allocate_block(3)
-    # mem.deallocate_block(b16)
-    #print(mem)
