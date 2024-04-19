@@ -126,8 +126,6 @@ class Memory:
         self.allocated_block_frames : dict[int, BlockFrame] = {}
 
         init_block = self.add_block_frame(0, MAIN_MEMORY_SIZE)
-        self.free_block_frames[self.size_to_index(init_block.get_size())].append(init_block)
-
 
         # For stats
         self.page_faults = 0
@@ -170,16 +168,9 @@ class Memory:
             pos += 1
         return even_power_bits, odd_power_bits
 
-
-    def rand_blocks_shortcut(self) -> BlockFrame:
-        """Shortcut to get a random block frame for testing."""
-        not_free = [block_frame for block_frame in self.allocated_block_frames.values() if not block_frame.free]
-        return random.choice(not_free)
-
     def size_to_index(self, size: int) -> int:
         """ Converts the size to the index in the free_blocks list. Same size should give index 0 --> log2(1KB/1KB) = 0"""
         return int(log2((size // MIN_BLOCK_SIZE)))
-
 
     def address_or_block(func):
         """Decorator that accepts either an address or block + offset and calls the correct memory function. This reduces duplication for 2 sets of args"""
@@ -222,18 +213,11 @@ class Memory:
     
     def move_to_disk(self, block: Block):
         """Moves the block to the disk memory."""
-        
         self.disk_lookup[block] = self.next_disk_mem_free
         self.disk_memory[self.next_disk_mem_free : self.next_disk_mem_free+block.get_size()] = self.memory[block.address : block.address+block.get_size()]          # python deals with out-of-bounds slice indexes when writing as appending, fortunately. This is perfect for me.
-        self.write_to_memory(block, 0, [None] * block.get_size())   # clear the memory for security
+        self.write_to_memory(block, 0, [None] * block.get_size())               # clear the memory for security
         self.next_disk_mem_free += block.get_size()
-
-        freed_block_frame = block.block_frame
-        freed_block_frame.remove_block()
-        self.free_block_frames[self.size_to_index(freed_block_frame.get_size())].append(freed_block_frame)
-        while freed_block_frame := self.merge_block(freed_block_frame.address):
-            ...                                                     # Merge blocks up
-        
+        self.free_tidy_up_frame(block.block_frame)
     
     def move_to_memory(self, block: Block):
         """Moves the block from the disk memory to the main memory."""
@@ -241,9 +225,23 @@ class Memory:
         self.memory[free_block_frame.address : free_block_frame.address+free_block_frame.get_size()] = self.disk_memory[self.disk_lookup[block] : self.disk_lookup[block]+block.get_size()]
         self.disk_memory[self.disk_lookup[block] : self.disk_lookup[block]+block.get_size()] = [None] * block.get_size()          # clear disk memory for security
         del self.disk_lookup[block]
-        # copy the data from the new block to the old block. Ideally we have a seperate object along the lines of page vs page frames.
         self.FIFOBlocks.enqueue(block)
 
+    def free_tidy_up_frame(self, block_frame: BlockFrame):
+        """Frees up the block frame and tidies it's links with blocks"""
+        block_frame.remove_block()
+        self.free_up_frame(block_frame)
+        while block_frame := self.merge_block_frames(block_frame.address): 
+            ...                 # Merge blocks up if possible
+        # the block frame gets reassigned in the while loop. It ends when 0 is returned (no merge)
+
+    def free_up_frame(self, block_frame: BlockFrame):
+        """Adds the block frame to the free list."""
+        self.free_block_frames[self.size_to_index(block_frame.get_size())].append(block_frame)
+    
+    def use_up_frame(self, block_frame: BlockFrame):
+        """Marks the block frame as used and removes it from the free list."""
+        self.free_block_frames[self.size_to_index(block_frame.get_size())].remove(block_frame)
 
     def allocate_block_frame(self, size: int, block: Block = None) -> BlockFrame:
         """Allocates a block for the requested size."""
@@ -264,33 +262,27 @@ class Memory:
                     self.use_block_frame(free_block_frame, block)
                     return free_block_frame
             else:                                                                                   # No free block of any size
-                oldest_block = self.fifo_eviction()
+                oldest_block = self.block_replacement()
                 self.move_to_disk(oldest_block)
-                self.debug(mem)
-                self.debug(f"evict {oldest_block.__str__()}")
-                self.debug([block.__str__() for block in self.allocated_block_frames.values()])
-                #input()
                 return self.allocate_block_frame(size, block)                                       # Try again. Will repeat until enough blocks are evicted
 
     def deallocate_block(self, block: Block):
         """Deallocates a block by marking it as free and adding it to the free blocks list."""
         b_frame = block.block_frame
         self.write_to_memory(block, 0, [None] * block.get_size())                           # clear the memory for security
-        self.free_block_frames[self.size_to_index(b_frame.get_size())].append(b_frame)
-        b_frame.remove_block()
-        while b_frame := self.merge_block(b_frame.address):
-            ...                                                     # placeholder as the block object gets reassigned in the while loop. It ends when 0 is returned (no merge)
+        self.free_tidy_up_frame(b_frame)
 
     def add_block_frame(self, address: int, size: int) -> BlockFrame:
         """Adds a block by creating the object + adding it to the allocated blocks dictionary."""
         block_frame = BlockFrame(address, size)
         self.allocated_block_frames[address] = block_frame
+        self.free_up_frame(block_frame)
         return block_frame
 
     def use_block_frame(self, block_frame: BlockFrame, block: Block):
         """Cleanly removes a block from the free status."""
         block = block or Block(block_frame)     # if block is None, create a new block
-        self.free_block_frames[self.size_to_index(block_frame.get_size())].remove(block_frame)
+        self.use_up_frame(block_frame)
         block_frame.set_block(block)
         self.FIFOBlocks.enqueue(block)
 
@@ -305,35 +297,30 @@ class Memory:
             raise InvalidMemoryRequestError("Cannot split further")
         if not block_frame.free:
             raise AllocatedBlockFrameError("Block frame is not empty")
-        self.free_block_frames[self.size_to_index(block_frame.get_size())].remove(block_frame)    # remove the parent block from free list, as it no longer exists
+        self.use_up_frame(block_frame)                  # remove the parent block from free list, as it no longer exists
         
         c1_addr, c2_addr = block_frame.get_children()
         c1 = self.add_block_frame(c1_addr, block_frame.get_size() >> 1)
         c2 = self.add_block_frame(c2_addr, block_frame.get_size() >> 1)
-
-        self.free_block_frames[self.size_to_index(c1.get_size())].append(c1)          # c1 is free until the next split
-        self.free_block_frames[self.size_to_index(c2.get_size())].append(c2)          # only c2 is free
     
         return c1
     
-    def merge_block(self, addr: int) -> BlockFrame:
+    def merge_block_frames(self, addr: int) -> BlockFrame:
         """Merges the block at the given address with its buddy if possible."""
         block_frame : BlockFrame = self.allocated_block_frames[addr]
         buddy_addr = block_frame.get_buddy()
         buddy_frame = self.allocated_block_frames[buddy_addr]
         if buddy_frame.free and (buddy_frame.get_size() == block_frame.get_size()):
-            self.free_block_frames[self.size_to_index(buddy_frame.get_size())].remove(buddy_frame)
-            self.free_block_frames[self.size_to_index(block_frame.get_size())].remove(block_frame)
+            self.use_up_frame(buddy_frame)
+            self.use_up_frame(block_frame)
             del self.allocated_block_frames[addr]
             del self.allocated_block_frames[buddy_addr]
             
             parent = self.add_block_frame(block_frame.get_parent(), block_frame.get_size() << 1)
-            self.free_block_frames[self.size_to_index(parent.get_size())].append(parent)
-            self.debug(f"Merge: {block_frame.__str__()}, {buddy_frame.__str__()}, {parent.__str__()}")
             return parent
         return 0    # no merge
     
-    def fifo_eviction(self) -> Block:
+    def block_replacement(self) -> Block:
         """Evicts the oldest block in the memory."""
         while True:
             oldest_block = self.FIFOBlocks.dequeue()
