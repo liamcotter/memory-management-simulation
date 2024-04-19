@@ -16,9 +16,9 @@ class Visualiser(object):
     
     def draw(self, parent, MIN_BLOCK_SIZE):
         self.screen.fill((255, 255, 255))
-        for block in parent.allocated_blocks.values():
-            addr = block.address
-            size = block.size
+        for block_frame in parent.allocated_block_frames.values():
+            addr = block_frame.address
+            size = block_frame.get_size()
             x, y = parent.address_to_coord(addr)
             real_x, real_y = x * self.per_block_space, y * self.per_block_space
 
@@ -33,7 +33,7 @@ class Visualiser(object):
                 y_size = self.per_block_space * blocks_size
             
             # Filled Square
-            if block.free:
+            if block_frame.free:
                 pygame.draw.rect(self.screen, (0, 255, 0), (real_x, real_y, x_size, y_size))
             else:
                 pygame.draw.rect(self.screen, (255, 0, 0), (real_x, real_y, x_size, y_size))
