@@ -12,8 +12,10 @@ class Page:
 
 
 class Stack:
-    def __init__(self):
-        self.stack = []
+    """A stack implementation using a Python list."""
+    def __init__(self, items=None):
+        """Option to pass in an iterable to initialise the stack with items."""
+        self.stack = items or []
 
     def push(self, item):
         self.stack.append(item)
@@ -32,6 +34,7 @@ class Stack:
 
 
 class Queue:
+    """A queue implementation using a looping Python list. It can grow and shrink as needed."""
     def __init__(self):
         self.body = [None] * 10
         self.front = 0    # index of first element, but 0 if empty

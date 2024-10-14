@@ -121,8 +121,8 @@ class Memory:
         self.disk_memory = [None] * MAIN_MEMORY_SIZE    # should be much larger, but no point simulating too much for proof-of-concept
         self.disk_lookup = {}                           # Should be handled as virtual memory, but it is too long to implement in a lab, so we just store the addresses for the moved blocks.
         self.next_disk_mem_free = 0                     # Next free address in the disk. Very inefficient, probably should be looping, but it is a quick solution to evicted blocks. Ideally a similar memory manager, but simpler should be used.
-        self.FIFOBlocks = Queue()                       # FIFO but with entire blocks instead of pages
-        self.free_block_frames = [[] for _ in range(NUM_BLOCK_SIZES)]
+        self.FIFOBlocks: Queue[Block] = Queue()                       # FIFO but with entire blocks instead of pages
+        self.free_block_frames: list[list[BlockFrame]] = [[] for _ in range(NUM_BLOCK_SIZES)]
         self.allocated_block_frames : dict[int, BlockFrame] = {}
 
         init_block = self.add_block_frame(0, MAIN_MEMORY_SIZE)
@@ -131,7 +131,7 @@ class Memory:
         self.page_faults = 0
         self.page_ops = 0
 
-        self.print_debug = False        # Quick enabling of debug
+        self.print_debug = True        # Quick enabling of debug
 
     def debug(self, item):
         """Prints the debug message if the debug flag is set."""
@@ -149,6 +149,7 @@ class Memory:
 
     
     def __str__(self) -> str:
+        """Runs the visualisation and return an empty string."""
         vis.draw(self, MIN_BLOCK_SIZE)
         return ""
 
@@ -186,7 +187,7 @@ class Memory:
                 raise ValueError("Invalid number of arguments")
         return wrapper
 
-    def memoryoperationchecks(func):
+    def memoryoperationchecks(func) -> callable:
         """Decorator for the memory read and write functions. Checks if the block is in memory and moves it if not."""
         def wrapper(self, block: Block, *args, **kwargs):
             #block = self.allocated_block_frames[address]
@@ -240,11 +241,11 @@ class Memory:
         self.free_block_frames[self.size_to_index(block_frame.get_size())].append(block_frame)
     
     def use_up_frame(self, block_frame: BlockFrame):
-        """Marks the block frame as used and removes it from the free list."""
+        """Removes the block frame from the free list."""
         self.free_block_frames[self.size_to_index(block_frame.get_size())].remove(block_frame)
 
     def allocate_block_frame(self, size: int, block: Block = None) -> BlockFrame:
-        """Allocates a block for the requested size."""
+        """Allocates a block frame for the requested size."""
         if size > MAIN_MEMORY_SIZE:
             raise InvalidMemoryRequestError(f"Requested size too large {size} > {MAIN_MEMORY_SIZE}")
         
@@ -267,20 +268,20 @@ class Memory:
                 return self.allocate_block_frame(size, block)                                       # Try again. Will repeat until enough blocks are evicted
 
     def deallocate_block(self, block: Block):
-        """Deallocates a block by marking it as free and adding it to the free blocks list."""
+        """Deallocates a block by erasing the contents and freeing the block frame."""
         b_frame = block.block_frame
         self.write_to_memory(block, 0, [None] * block.get_size())                           # clear the memory for security
         self.free_tidy_up_frame(b_frame)
 
     def add_block_frame(self, address: int, size: int) -> BlockFrame:
-        """Adds a block by creating the object + adding it to the allocated blocks dictionary."""
+        """Adds a block frame by creating the object."""
         block_frame = BlockFrame(address, size)
         self.allocated_block_frames[address] = block_frame
         self.free_up_frame(block_frame)
         return block_frame
 
     def use_block_frame(self, block_frame: BlockFrame, block: Block):
-        """Cleanly removes a block from the free status."""
+        """Cleanly removes a block frame from the free status."""
         block = block or Block(block_frame)     # if block is None, create a new block
         self.use_up_frame(block_frame)
         block_frame.set_block(block)
@@ -292,7 +293,7 @@ class Memory:
             Essentially deletes the parent block frame and adds free + allocated child block frames.
             Returns the first child block frame.
         """
-        block_frame: BlockFrame = self.allocated_block_frames[addr]
+        block_frame = self.allocated_block_frames[addr]
         if block_frame.get_size() == MIN_BLOCK_SIZE:
             raise InvalidMemoryRequestError("Cannot split further")
         if not block_frame.free:
@@ -306,7 +307,7 @@ class Memory:
         return c1
     
     def merge_block_frames(self, addr: int) -> BlockFrame:
-        """Merges the block at the given address with its buddy if possible."""
+        """Merges the block frame at the given address with its buddy if possible."""
         block_frame : BlockFrame = self.allocated_block_frames[addr]
         buddy_addr = block_frame.get_buddy()
         buddy_frame = self.allocated_block_frames[buddy_addr]
